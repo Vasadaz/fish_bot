@@ -4,13 +4,21 @@ import time
 from functools import partial
 from enum import Enum
 from textwrap import dedent
+from typing import List
 
 import redis
 
 from environs import Env
-from telegram import Bot, ReplyKeyboardMarkup, Update
+from telegram import (
+    Bot,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputMediaPhoto,
+    Update,
+)
 from telegram.ext import (
     CallbackContext,
+    CallbackQueryHandler,
     CommandHandler,
     ConversationHandler,
     Filters,
@@ -26,37 +34,98 @@ logger = logging.getLogger(__file__)
 
 class Step(Enum):
     HANDLE_MENU  = 1
-    WAIT = 2
+    HANDLE_DESCRIPTION = 2
 
 
-def handle_fallback(update: Update, context: CallbackContext) -> Step:
-    update.message.reply_text('Я тебя не понял...')
+def build_menu(buttons: List[InlineKeyboardButton], n_cols: int) -> List[List[InlineKeyboardButton]]:
+    menu = [buttons[i:i + n_cols] for i in range(0, len(buttons), n_cols)]
 
-    return Step.HANDLE_MENU
+    return menu
 
-def start(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
-    db.set(update.message.chat.id, 'SТART')
-
+def get_assortment_keyboard(elastic: ElasticPath):
     products = []
     for product_notes in elastic.get_products():
-        products.append([product_notes.get('attributes').get('name')])
+        products.append(
+            InlineKeyboardButton(
+                text=product_notes.get('attributes').get('name'),
+                callback_data=product_notes.get('id'),
+            )
+        )
 
-    products_keyboard = ReplyKeyboardMarkup(products, resize_keyboard=True)
+    return InlineKeyboardMarkup(build_menu(products, n_cols=3))
 
-    update.message.reply_text(
-        f'{update.effective_user.full_name}, будем знакомы, я Бот Ботыч!',
-        reply_markup=products_keyboard,
+
+def handle_fallback(update: Update, context: CallbackContext) -> None:
+    update.message.reply_text('Я тебя не понял...')
+
+
+def handle_description(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
+    query = update.callback_query
+    product_id = query.data
+
+    db.set(query.message.chat.id, 'HANDLE_DESCRIPTION')
+
+    product_notes = elastic.get_product_notes(product_id)
+    product_attributes = product_notes.pop('attributes')
+    product_relationships = product_notes.pop('relationships')
+
+    name = product_attributes.get('name')
+    price = int(product_attributes.get('price').get('USD').get('amount') / 100)
+    description = product_attributes.get('description')
+    image_id = product_relationships.get('main_image').get('data').get('id')
+
+    variants = [
+        InlineKeyboardButton(text='1 кг.', callback_data=1),
+        InlineKeyboardButton(text='5 кг.', callback_data=5),
+        InlineKeyboardButton(text='10 кг.', callback_data=10),
+        InlineKeyboardButton(text='Назад', callback_data=0),
+    ]
+
+    query.answer()
+    query.edit_message_media(
+        media=InputMediaPhoto(
+            media=open(elastic.get_image_path(image_id), 'rb'),
+            caption=dedent(f'''\
+                {name} -  {price}₽/кг.
+                
+                {description}
+            '''),
+        ),
+        reply_markup=InlineKeyboardMarkup(build_menu(variants, n_cols=3)),
     )
 
     return Step.HANDLE_MENU
 
 
-def send_echo_msg(update: Update, context: CallbackContext, db: redis.StrictRedis) -> Step:
-    db.set(update.message.chat.id, update.message.text)
-    update.message.reply_text(update.message.text)
+def handle_menu(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
+    query = update.callback_query
 
-    return Step.HANDLE_MENU
+    db.set(query.message.chat.id, 'HANDLE_MENU')
 
+    query.answer()
+    query.edit_message_media(
+        media=InputMediaPhoto(
+            media=open('logo.png', 'rb'),
+            caption=f'{update.effective_user.full_name}, посмотрит мой ассортимент 👇',
+        ),
+        reply_markup=get_assortment_keyboard(elastic),
+    ),
+
+
+    return Step.HANDLE_DESCRIPTION
+
+
+def handle_start(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
+    db.set(update.message.chat.id, 'START')
+
+    context.bot.send_photo(
+        update.message.chat.id,
+        photo=open('logo.png', 'rb'),
+        caption=f'{update.effective_user.full_name}, посмотрит мой ассортимент 👇',
+        reply_markup=get_assortment_keyboard(elastic),
+    )
+
+    return Step.HANDLE_DESCRIPTION
 
 def send_err(update: Update, context: CallbackContext) -> None:
     logger.error(msg='Exception during message processing:', exc_info=context.error)
@@ -115,27 +184,28 @@ def main():
         decode_responses=True,
     )
 
-    start_ = partial(start, db=db, elastic=elastic)
-    send_echo_msg_ = partial(send_echo_msg, db=db)
-
+    handle_start_ = partial(handle_start, db=db, elastic=elastic)
+    handle_menu_ = partial(handle_menu, db=db, elastic=elastic)
+    handle_description_ = partial(handle_description, db=db, elastic=elastic)
+    handle_fallback_ = partial(handle_fallback)
 
     logger.info('Start Telegram bot.')
 
     while True:
         try:
             conv_handler = ConversationHandler(
-                entry_points=[CommandHandler('start', start_)],
+                entry_points=[CommandHandler('start', handle_start_)],
                 states={
-                    Step.ECHO: [
-                        MessageHandler(Filters.text, send_echo_msg_),
-                        CommandHandler('start', start_),
-                    ],
                     Step.HANDLE_MENU: [
-                        MessageHandler(Filters.text, send_echo_msg_),
-                        CommandHandler('start', start_)
+                        CallbackQueryHandler(handle_menu_),
+                        CommandHandler('start', handle_start_),
+                    ],
+                    Step.HANDLE_DESCRIPTION: [
+                        CallbackQueryHandler(handle_description_),
+                        CommandHandler('start', handle_start_),
                     ],
                 },
-                fallbacks=[MessageHandler(Filters.all, handle_fallback)],
+                fallbacks=[MessageHandler(Filters.all, handle_fallback_)],
             )
 
             updater = Updater(tg_token)
