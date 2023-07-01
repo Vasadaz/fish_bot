@@ -20,11 +20,12 @@ class ElasticPath:
         self.products_url = self.base_url + '/catalog/products/'
         self.carts_url = self.base_url + '/v2/carts/'
 
-        self.access_token = self.__get_access()
+        self.access_token = self._get_access()
+        self.headers = {'Authorization': self.access_token}
 
 
 
-    def __get_access(self) -> str:
+    def _get_access(self) -> str:
         data = {
             'client_id': self.client_id,
             'client_secret': self.client_secret,
@@ -38,8 +39,9 @@ class ElasticPath:
 
         return  f'{response["token_type"]} {response["access_token"]}'
 
-    def get_products(self):
-        headers = {'Authorization': self.access_token}
+    def get_products(self) -> dict[str:str]:
+        response = requests.get(self.products_url, headers=self.headers)
+        response.raise_for_status()
 
         response = requests.get(self.products_url.__str__(), headers=headers)
         response.raise_for_status()
