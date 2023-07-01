@@ -154,3 +154,6 @@ cython_debug/
 
 # IDEA
 .idea/
+
+# Project
+images/
