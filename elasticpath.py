@@ -46,7 +46,10 @@ class ElasticPath:
         response = requests.get(self.products_url, headers=self.headers)
         response.raise_for_status()
 
-        response = requests.get(self.products_url.__str__(), headers=headers)
+        return response.json().get('data')
+
+    def get_product_notes(self, product_id) -> dict[str:str]:
+        response = requests.get(self.products_url + product_id, headers=self.headers)
         response.raise_for_status()
 
         return response.json().get('data')
