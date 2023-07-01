@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import requests
 
 from environs import Env
@@ -19,6 +21,7 @@ class ElasticPath:
         self.access_url = self.base_url + '/oauth/access_token/'
         self.products_url = self.base_url + '/catalog/products/'
         self.carts_url = self.base_url + '/v2/carts/'
+        self.files_url = self.base_url + '/v2/files/'
 
         self.access_token = self._get_access()
         self.headers = {'Authorization': self.access_token}
@@ -47,6 +50,27 @@ class ElasticPath:
         response.raise_for_status()
 
         return response.json().get('data')
+
+    def get_image_path(self, image_id) -> str:
+        dir_path = Path('images')
+        dir_path.mkdir(parents=True, exist_ok=True)
+
+        for file_path in dir_path.iterdir():
+            if image_id == file_path.stem:
+                return file_path.as_posix()
+
+        response = requests.get(self.files_url + image_id, headers=self.headers)
+        response.raise_for_status()
+        download_url = response.json().get('data').get('link').get('href')
+        save_path = Path(dir_path) / Path(download_url).name
+
+        download = requests.get(download_url)
+        download.raise_for_status()
+
+        with open(save_path, 'wb') as file:
+            file.write(download.content)
+
+        return save_path.as_posix()
 
 
 if __name__ == '__main__':
