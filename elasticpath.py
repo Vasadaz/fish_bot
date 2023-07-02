@@ -26,8 +26,6 @@ class ElasticPath:
         self.access_token = self._get_access()
         self.headers = {'Authorization': self.access_token}
 
-
-
     def _get_access(self) -> str:
         data = {
             'client_id': self.client_id,
@@ -35,24 +33,41 @@ class ElasticPath:
             'grant_type': 'client_credentials',
         }
 
-
         response = requests.post(self.access_url, data=data)
         response.raise_for_status()
         response = response.json()
 
         return  f'{response["token_type"]} {response["access_token"]}'
 
-    def get_products(self) -> dict[str:str]:
+    @staticmethod
+    def _serialize_product_notes(product_notes) -> dict[str:str|int]:
+        product_attributes = product_notes.pop('attributes')
+        product_relationships = product_notes.pop('relationships')
+
+        return {
+            'id': product_notes.get('id'),
+            'name': product_attributes.get('name'),
+            'sku': product_attributes.get('sku'),
+            'description': product_attributes.get('description'),
+            'price': product_attributes.get('price').get('USD').get('amount'),
+            'main_image_id': product_relationships.get('main_image').get('data').get('id'),
+        }
+
+    def get_products(self) -> list[dict[str:str|int]]:
         response = requests.get(self.products_url, headers=self.headers)
         response.raise_for_status()
 
-        return response.json().get('data')
+        products = []
+        for product_notes in response.json().get('data'):
+            products.append(self._serialize_product_notes(product_notes))
+
+        return products
 
     def get_product_notes(self, product_id) -> dict[str:str]:
         response = requests.get(self.products_url + product_id, headers=self.headers)
         response.raise_for_status()
 
-        return response.json().get('data')
+        return self._serialize_product_notes(response.json().get('data'))
 
     def get_image_path(self, image_id) -> str:
         dir_path = Path('images')
@@ -74,6 +89,56 @@ class ElasticPath:
             file.write(download.content)
 
         return save_path.as_posix()
+
+    def get_cart_items(self) -> dict[str:str]:
+        response = requests.get(self.base_url + f'/v2/carts/{self.client_id}/items', headers=self.headers)
+        response.raise_for_status()
+        cart_items = {
+            'cart_price': response.json().get('meta').get('display_price').get('with_tax').get('amount'),
+            'products': [],
+        }
+
+        for item_notes in response.json().get('data'):
+            cart_items['products'].append({
+                'id': item_notes.get('id'),
+                'name': item_notes.get('name'),
+                'quantity': item_notes.get('quantity'),
+                'price': item_notes.get('value').get('amount'),
+            })
+
+
+
+        print(cart_items)
+
+        return cart_items
+
+    def add_product_to_cart(self, product_id, quantity) -> None:
+        headers = {
+            **self.headers,
+            'Content-Type': 'application/json',
+        }
+
+        product_notes = self.get_product_notes(product_id)
+
+        product_data = {
+            "data": {
+                "type": "custom_item",
+                "name": product_notes.get('name'),
+                "sku": product_notes.get('sku'),
+                "description": product_notes.get('description'),
+                "quantity": quantity,
+                "price": {
+                    "amount": product_notes.get('price'),
+                },
+            },
+        }
+
+        response = requests.post(
+            self.base_url + f'/v2/carts/{self.client_id}/items',
+            headers=headers,
+            json=product_data
+        )
+        response.raise_for_status()
 
 
 if __name__ == '__main__':

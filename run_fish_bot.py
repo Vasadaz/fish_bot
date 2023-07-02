@@ -1,10 +1,10 @@
+import json
 import logging
 import time
 
 from functools import partial
 from enum import Enum
 from textwrap import dedent
-from typing import List
 
 import redis
 
@@ -35,50 +35,95 @@ logger = logging.getLogger(__file__)
 class Step(Enum):
     HANDLE_MENU  = 1
     HANDLE_DESCRIPTION = 2
+    HANDLE_ADD_TO_CART = 3
+    HANDLE_CART = 4
 
 
-def build_menu(buttons: List[InlineKeyboardButton], n_cols: int) -> List[List[InlineKeyboardButton]]:
-    menu = [buttons[i:i + n_cols] for i in range(0, len(buttons), n_cols)]
+def build_menu(buttons: list[InlineKeyboardButton], n_cols: int) -> list[list[InlineKeyboardButton]]:
+    buttons = [buttons[i:i + n_cols] for i in range(0, len(buttons), n_cols)]
 
-    return menu
+    return buttons
 
 def get_assortment_keyboard(elastic: ElasticPath):
     products = []
     for product_notes in elastic.get_products():
         products.append(
             InlineKeyboardButton(
-                text=product_notes.get('attributes').get('name'),
-                callback_data=product_notes.get('id'),
+                text=product_notes.get('name'),
+                callback_data=json.dumps({'id': product_notes.get('id')}),
             )
         )
 
     return InlineKeyboardMarkup(build_menu(products, n_cols=3))
 
 
-def handle_fallback(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text('Я тебя не понял...')
+def handle_add_to_cart(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
+    query = update.callback_query
+    callback_query = json.loads(query.data)
+
+    if callback_query.get('back'):
+        return handle_menu(update, context, db, elastic)
+
+    db.set(query.message.chat.id, 'HANDLE_ADD_TO_CART')
+
+    product_id = callback_query.get('id')
+    quantity = callback_query.get('quantity')
+
+    elastic.add_product_to_cart(product_id, quantity)
+
+    variants = [
+        InlineKeyboardButton(
+            text='Назад',
+            callback_data=json.dumps({'back': True}),
+        ),
+        InlineKeyboardButton(
+            text='Посмотреть корзину',
+            callback_data=json.dumps({'cart': True}),
+        ),
+    ]
+
+    query.answer()
+    query.edit_message_reply_markup(
+        reply_markup=InlineKeyboardMarkup(build_menu(variants, n_cols=2)),
+    )
+
+    return Step.HANDLE_CART
 
 
 def handle_description(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
     query = update.callback_query
-    product_id = query.data
+    callback_query = json.loads(query.data)
+
+    if callback_query.get('back'):
+        return handle_menu(update, context, db, elastic)
 
     db.set(query.message.chat.id, 'HANDLE_DESCRIPTION')
 
+    product_id = callback_query.get('id')
     product_notes = elastic.get_product_notes(product_id)
-    product_attributes = product_notes.pop('attributes')
-    product_relationships = product_notes.pop('relationships')
 
-    name = product_attributes.get('name')
-    price = int(product_attributes.get('price').get('USD').get('amount') / 100)
-    description = product_attributes.get('description')
-    image_id = product_relationships.get('main_image').get('data').get('id')
+    name = product_notes.get('name')
+    price = int(product_notes.get('price') / 100)
+    description = product_notes.get('description')
+    image_id = product_notes.get('main_image_id')
 
     variants = [
-        InlineKeyboardButton(text='1 кг.', callback_data=1),
-        InlineKeyboardButton(text='5 кг.', callback_data=5),
-        InlineKeyboardButton(text='10 кг.', callback_data=10),
-        InlineKeyboardButton(text='Назад', callback_data=0),
+        InlineKeyboardButton(
+            text='1 кг.',
+            callback_data=json.dumps({'id': product_id, 'quantity': 1})
+        ),
+        InlineKeyboardButton(
+            text='5 кг.',
+            callback_data=json.dumps({'id': product_id, 'quantity': 5})
+        ),
+        InlineKeyboardButton(
+            text='10 кг.',
+            callback_data=json.dumps({'id': product_id, 'quantity': 10})
+        ),
+        InlineKeyboardButton(
+            text='Назад',
+            callback_data=json.dumps({'back': True}),
+        ),
     ]
 
     query.answer()
@@ -86,7 +131,7 @@ def handle_description(update: Update, context: CallbackContext, db: redis.Stric
         media=InputMediaPhoto(
             media=open(elastic.get_image_path(image_id), 'rb'),
             caption=dedent(f'''\
-                {name} -  {price}₽/кг.
+                {name} - {price} ₽/кг.
                 
                 {description}
             '''),
@@ -94,7 +139,59 @@ def handle_description(update: Update, context: CallbackContext, db: redis.Stric
         reply_markup=InlineKeyboardMarkup(build_menu(variants, n_cols=3)),
     )
 
-    return Step.HANDLE_MENU
+    return Step.HANDLE_ADD_TO_CART
+
+
+def handle_fallback(update: Update, context: CallbackContext) -> None:
+    update.message.reply_text('Я тебя не понял...')
+
+
+def handle_cart(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
+    query = update.callback_query
+    callback_query = json.loads(query.data)
+
+    if callback_query.get('back'):
+        return handle_menu(update, context, db, elastic)
+
+    db.set(query.message.chat.id, 'HANDLE_CART')
+
+    product_id = callback_query.get('id')
+    quantity = callback_query.get('quantity')
+    cart_items = elastic.get_cart_items()
+    text = f'Стоимость корзины - {int(cart_items.get("cart_price") / 100)} ₽\n\n'
+    variants = [
+        InlineKeyboardButton(
+            text='Назад',
+            callback_data=json.dumps({'back': True}),
+        ),
+    ]
+
+    for product_notes in cart_items.get('products'):
+        text += f'{product_notes.get("name")} {product_notes.get("quantity")}кг. - {int(product_notes.get("price") / 100)} ₽\n'
+        variants.append(
+            InlineKeyboardButton(
+                text=f'Удалить {product_notes.get("name")}',
+                callback_data=json.dumps({'id': product_notes.get('id')}),
+            )
+        )
+
+    variants.append(
+        InlineKeyboardButton(
+            text=f'Оплатить {int(cart_items.get("cart_price") / 100)} ₽',
+            callback_data=json.dumps({'payment': True}),
+        ),
+    )
+
+    query.answer()
+    query.edit_message_media(
+        media=InputMediaPhoto(
+            media=open('cart.png', 'rb'),
+            caption=text,
+        ),
+        reply_markup=InlineKeyboardMarkup(build_menu(variants, n_cols=1)),
+    )
+
+    return Step.HANDLE_CART
 
 
 def handle_menu(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
@@ -110,7 +207,6 @@ def handle_menu(update: Update, context: CallbackContext, db: redis.StrictRedis,
         ),
         reply_markup=get_assortment_keyboard(elastic),
     ),
-
 
     return Step.HANDLE_DESCRIPTION
 
@@ -160,9 +256,6 @@ def main():
         store_id=env.str('ELASTIC_STORE_ID'),
     )
 
-
-    elastic.get_products()
-
     bot = Bot(tg_token)
     tg_bot_name = f'@{bot.get_me().username}'
 
@@ -175,7 +268,6 @@ def main():
         admin_tg_chat_id=admin_tg_chat_id,
     ))
 
-
     db = redis.StrictRedis(
         host=db_host,
         port=db_port,
@@ -187,6 +279,8 @@ def main():
     handle_start_ = partial(handle_start, db=db, elastic=elastic)
     handle_menu_ = partial(handle_menu, db=db, elastic=elastic)
     handle_description_ = partial(handle_description, db=db, elastic=elastic)
+    handle_add_to_cart_ = partial(handle_add_to_cart, db=db, elastic=elastic)
+    handle_cart_ = partial(handle_cart, db=db, elastic=elastic)
     handle_fallback_ = partial(handle_fallback)
 
     logger.info('Start Telegram bot.')
@@ -202,6 +296,14 @@ def main():
                     ],
                     Step.HANDLE_DESCRIPTION: [
                         CallbackQueryHandler(handle_description_),
+                        CommandHandler('start', handle_start_),
+                    ],
+                    Step.HANDLE_ADD_TO_CART: [
+                        CallbackQueryHandler(handle_add_to_cart_),
+                        CommandHandler('start', handle_start_),
+                    ],
+                    Step.HANDLE_CART: [
+                        CallbackQueryHandler(handle_cart_),
                         CommandHandler('start', handle_start_),
                     ],
                 },
