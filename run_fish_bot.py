@@ -203,7 +203,11 @@ def handle_menu(update: Update, context: CallbackContext, db: redis.StrictRedis,
     query.edit_message_media(
         media=InputMediaPhoto(
             media=open('logo.png', 'rb'),
-            caption=f'{update.effective_user.full_name}, посмотрит мой ассортимент 👇',
+            caption=dedent(f'''\
+                {update.effective_user.full_name}, я продаю свежую красную рыбу 🐠
+                
+                Посмотри мой ассортимент 👇
+            '''),
         ),
         reply_markup=get_assortment_keyboard(elastic),
     ),
@@ -217,7 +221,12 @@ def handle_start(update: Update, context: CallbackContext, db: redis.StrictRedis
     context.bot.send_photo(
         update.message.chat.id,
         photo=open('logo.png', 'rb'),
-        caption=f'{update.effective_user.full_name}, посмотрит мой ассортимент 👇',
+        caption=dedent(f'''\
+                {update.effective_user.full_name}, привет 👋
+                Я продаю свежую красную рыбу 🐠
+                
+                Посмотри мой ассортимент 👇
+            '''),
         reply_markup=get_assortment_keyboard(elastic),
     )
 
