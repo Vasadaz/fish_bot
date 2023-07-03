@@ -192,13 +192,14 @@ def handle_cart(update: Update, context: CallbackContext, db: redis.StrictRedis,
 
     if callback_query.get('back'):
         return handle_menu(update, context, db, elastic)
+    elif callback_query.get('delete'):
+        elastic.delete_product_from_cart(callback_query.get('id'))
 
     db.set(query.message.chat.id, 'HANDLE_CART')
 
-    product_id = callback_query.get('id')
-    quantity = callback_query.get('quantity')
     cart_items = elastic.get_cart_items()
-    text = f'Стоимость корзины - {int(cart_items.get("cart_price") / 100)} ₽\n\n'
+    cart_price = int(cart_items.get("cart_price") / 100)
+    text = f'Стоимость корзины - {cart_price} ₽\n\n'
     variants = [
         InlineKeyboardButton(
             text='Назад',
@@ -207,20 +208,28 @@ def handle_cart(update: Update, context: CallbackContext, db: redis.StrictRedis,
     ]
 
     for product_notes in cart_items.get('products'):
-        text += f'{product_notes.get("name")} {product_notes.get("quantity")}кг. - {int(product_notes.get("price") / 100)} ₽\n'
+        product_name = product_notes.get("name")
+        product_quantity = product_notes.get("quantity")
+        product_price = int(product_notes.get("price") / 100)
+        text += f'{product_name} {product_quantity}кг. - {product_price} ₽\n'
+
         variants.append(
             InlineKeyboardButton(
                 text=f'Удалить {product_notes.get("name")}',
-                callback_data=json.dumps({'id': product_notes.get('id')}),
+                callback_data=json.dumps({
+                    'id': product_notes.get('id'),
+                    'delete': True,
+                }),
             )
         )
 
-    variants.append(
-        InlineKeyboardButton(
-            text=f'Оплатить {int(cart_items.get("cart_price") / 100)} ₽',
-            callback_data=json.dumps({'payment': True}),
-        ),
-    )
+    if cart_price:
+        variants.append(
+            InlineKeyboardButton(
+                text=f'Оплатить {int(cart_items.get("cart_price") / 100)} ₽',
+                callback_data=json.dumps({'payment': True}),
+            ),
+        )
 
     query.answer()
     query.edit_message_media(
