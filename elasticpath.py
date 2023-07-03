@@ -94,7 +94,7 @@ class ElasticPath:
         response = requests.get(self.carts_url + f'{self.client_id}/items', headers=self.headers)
         response.raise_for_status()
         cart_items = {
-            'cart_price': response.json().get('meta').get('display_price').get('with_tax').get('amount'),
+            'cart_amount': response.json().get('meta').get('display_price').get('with_tax').get('amount'),
             'products': [],
         }
 
@@ -103,7 +103,7 @@ class ElasticPath:
                 'id': item_notes.get('id'),
                 'name': item_notes.get('name'),
                 'quantity': item_notes.get('quantity'),
-                'price': item_notes.get('value').get('amount'),
+                'amount': item_notes.get('value').get('amount'),
             })
 
         return cart_items
