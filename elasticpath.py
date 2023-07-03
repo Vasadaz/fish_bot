@@ -91,7 +91,7 @@ class ElasticPath:
         return save_path.as_posix()
 
     def get_cart_items(self) -> dict[str:str]:
-        response = requests.get(self.base_url + f'/v2/carts/{self.client_id}/items', headers=self.headers)
+        response = requests.get(self.carts_url + f'{self.client_id}/items', headers=self.headers)
         response.raise_for_status()
         cart_items = {
             'cart_price': response.json().get('meta').get('display_price').get('with_tax').get('amount'),
@@ -106,11 +106,13 @@ class ElasticPath:
                 'price': item_notes.get('value').get('amount'),
             })
 
-
-
-        print(cart_items)
-
         return cart_items
+
+
+    def delete_product_from_cart(self, product_id) -> None:
+        response = requests.delete(self.carts_url + f'{self.client_id}/items/' + product_id, headers=self.headers)
+        response.raise_for_status()
+
 
     def add_product_to_cart(self, product_id, quantity) -> None:
         headers = {
