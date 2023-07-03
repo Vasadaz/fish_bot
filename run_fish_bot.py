@@ -228,6 +228,36 @@ def handle_description(update: Update, context: CallbackContext, db: redis.Stric
     return Step.HANDLE_ADD_TO_CART
 
 
+def handle_email(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
+    db.set(update.message.chat.id, 'WAITING_EMAIL')
+
+    variants = [
+        InlineKeyboardButton(
+            text='В меню',
+            callback_data=json.dumps({'menu': True}),
+        ),
+    ]
+
+    text = 'Ваша корзина пуста'
+
+    context.bot.edit_message_media(
+        chat_id=context.user_data['chat_id'],
+        message_id=context.user_data['bot_last_message_id'],
+        media=InputMediaPhoto(
+            media=open('cart.png', 'rb'),
+            caption=dedent(f'''\
+                Мы получили ваш email 📧
+                В течении дня вам придёт счёт на почту {update.message.text}
+
+                Ваша корзина пуста.
+            '''),
+        ),
+        reply_markup=InlineKeyboardMarkup(build_keyboard_buttons(variants, n_cols=1)),
+    )
+
+    return Step.HANDLE_CART
+
+
 def handle_error(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
     logger.error(msg='Exception during message processing:', exc_info=context.error)
 
@@ -406,6 +436,7 @@ def main():
     handle_add_to_cart_ = partial(handle_add_to_cart, db=db, elastic=elastic)
     handle_cart_ = partial(handle_cart, db=db, elastic=elastic)
     handle_description_ = partial(handle_description, db=db, elastic=elastic)
+    handle_email_ = partial(handle_email, db=db, elastic=elastic)
     handle_error_ = partial(handle_error, db=db, elastic=elastic)
     handle_fallback_ = partial(handle_fallback, db=db, elastic=elastic)
     handle_menu_ = partial(handle_menu, db=db, elastic=elastic)
@@ -435,6 +466,10 @@ def main():
                     ],
                     Step.HANDLE_CART: [
                         CallbackQueryHandler(handle_cart_),
+                        CommandHandler('start', handle_start_),
+                    ],
+                    Step.WAITING_EMAIL: [
+                        MessageHandler(Filters.regex('@'), handle_email_),
                         CommandHandler('start', handle_start_),
                     ],
                 },
