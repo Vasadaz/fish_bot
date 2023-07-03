@@ -37,9 +37,10 @@ class Step(Enum):
     HANDLE_DESCRIPTION = 2
     HANDLE_ADD_TO_CART = 3
     HANDLE_CART = 4
+    WAITING_EMAIL = 5
 
 
-def build_menu(buttons: list[InlineKeyboardButton], n_cols: int) -> list[list[InlineKeyboardButton]]:
+def build_keyboard_buttons(buttons: list[InlineKeyboardButton], n_cols: int) -> list[list[InlineKeyboardButton]]:
     buttons = [buttons[i:i + n_cols] for i in range(0, len(buttons), n_cols)]
 
     return buttons
@@ -53,16 +54,25 @@ def get_assortment_keyboard(elastic: ElasticPath):
                 callback_data=json.dumps({'id': product_notes.get('id')}),
             )
         )
+    keyboard_buttons = build_keyboard_buttons(products, n_cols=4)
+    keyboard_buttons += [
+        [InlineKeyboardButton(
+            text='Посмотреть корзину',
+            callback_data=json.dumps({'cart': True}),
+        )],
+    ]
 
-    return InlineKeyboardMarkup(build_menu(products, n_cols=3))
+    return InlineKeyboardMarkup(keyboard_buttons)
 
 
 def handle_add_to_cart(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
     query = update.callback_query
     callback_query = json.loads(query.data)
 
-    if callback_query.get('back'):
+    if callback_query.get('menu'):
         return handle_menu(update, context, db, elastic)
+    elif callback_query.get('cart'):
+        return handle_cart(update, context, db, elastic)
 
     db.set(query.message.chat.id, 'HANDLE_ADD_TO_CART')
 
@@ -73,8 +83,8 @@ def handle_add_to_cart(update: Update, context: CallbackContext, db: redis.Stric
 
     variants = [
         InlineKeyboardButton(
-            text='Назад',
-            callback_data=json.dumps({'back': True}),
+            text='В меню',
+            callback_data=json.dumps({'menu': True}),
         ),
         InlineKeyboardButton(
             text='Посмотреть корзину',
@@ -84,7 +94,73 @@ def handle_add_to_cart(update: Update, context: CallbackContext, db: redis.Stric
 
     query.answer()
     query.edit_message_reply_markup(
-        reply_markup=InlineKeyboardMarkup(build_menu(variants, n_cols=2)),
+        reply_markup=InlineKeyboardMarkup(build_keyboard_buttons(variants, n_cols=1)),
+    )
+
+    return Step.HANDLE_CART
+
+
+def handle_cart(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
+    query = update.callback_query
+    callback_query = json.loads(query.data)
+
+    if callback_query.get('menu'):
+        return handle_menu(update, context, db, elastic)
+    elif callback_query.get('delete'):
+        elastic.delete_product_from_cart(callback_query.get('id'))
+    elif callback_query.get('payment'):
+        return handle_payment(update, context, db, elastic)
+
+    db.set(query.message.chat.id, 'HANDLE_CART')
+
+    cart_items = elastic.get_cart_items()
+    cart_amount = int(cart_items.get("cart_amount") / 100)
+    text = 'Состав корзины:\n'
+    variants = [
+        InlineKeyboardButton(
+            text='В меню',
+            callback_data=json.dumps({'menu': True}),
+        ),
+    ]
+
+    for product_notes in cart_items.get('products'):
+        product_name = product_notes.get("name")
+        product_quantity = product_notes.get("quantity")
+        product_amount = int(product_notes.get("amount") / 100)
+        text += f'{product_name} {product_quantity}кг. - {product_amount} ₽\n'
+
+        variants.append(
+            InlineKeyboardButton(
+                text=f'Удалить {product_notes.get("name")}',
+                callback_data=json.dumps({
+                    'delete': True,
+                    'id': product_notes.get('id'),
+                }),
+            )
+        )
+
+    if cart_amount:
+        text += f'\nСтоимость корзины - {cart_amount} ₽'
+
+        variants.append(
+            InlineKeyboardButton(
+                text=f'Оплатить {cart_amount} ₽',
+                callback_data=json.dumps({
+                    'payment': True,
+                    'cart_amount': cart_amount,
+                }),
+            ),
+        )
+    else:
+        text = 'Ваша корзина пуста.'
+
+    query.answer()
+    query.edit_message_media(
+        media=InputMediaPhoto(
+            media=open('cart.png', 'rb'),
+            caption=text,
+        ),
+        reply_markup=InlineKeyboardMarkup(build_keyboard_buttons(variants, n_cols=1)),
     )
 
     return Step.HANDLE_CART
@@ -94,8 +170,10 @@ def handle_description(update: Update, context: CallbackContext, db: redis.Stric
     query = update.callback_query
     callback_query = json.loads(query.data)
 
-    if callback_query.get('back'):
+    if callback_query.get('menu'):
         return handle_menu(update, context, db, elastic)
+    elif callback_query.get('cart'):
+        return handle_cart(update, context, db, elastic)
 
     db.set(query.message.chat.id, 'HANDLE_DESCRIPTION')
 
@@ -120,10 +198,18 @@ def handle_description(update: Update, context: CallbackContext, db: redis.Stric
             text='10 кг.',
             callback_data=json.dumps({'id': product_id, 'quantity': 10})
         ),
-        InlineKeyboardButton(
-            text='Назад',
-            callback_data=json.dumps({'back': True}),
-        ),
+    ]
+
+    keyboard_buttons = build_keyboard_buttons(variants, n_cols=3)
+    keyboard_buttons += [
+        [InlineKeyboardButton(
+            text='В меню',
+            callback_data=json.dumps({'menu': True}),
+        )],
+        [InlineKeyboardButton(
+            text='Посмотреть корзину',
+            callback_data=json.dumps({'cart': True}),
+        )],
     ]
 
     query.answer()
@@ -136,7 +222,7 @@ def handle_description(update: Update, context: CallbackContext, db: redis.Stric
                 {description}
             '''),
         ),
-        reply_markup=InlineKeyboardMarkup(build_menu(variants, n_cols=3)),
+        reply_markup=InlineKeyboardMarkup(keyboard_buttons),
     )
 
     return Step.HANDLE_ADD_TO_CART
@@ -186,67 +272,14 @@ def handle_fallback(update: Update, context: CallbackContext, db: redis.StrictRe
     return Step.HANDLE_MENU
 
 
-def handle_cart(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
+def handle_menu(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
     query = update.callback_query
     callback_query = json.loads(query.data)
 
-    if callback_query.get('back'):
-        return handle_menu(update, context, db, elastic)
-    elif callback_query.get('delete'):
-        elastic.delete_product_from_cart(callback_query.get('id'))
-
-    db.set(query.message.chat.id, 'HANDLE_CART')
-
-    cart_items = elastic.get_cart_items()
-    cart_price = int(cart_items.get("cart_price") / 100)
-    text = f'Стоимость корзины - {cart_price} ₽\n\n'
-    variants = [
-        InlineKeyboardButton(
-            text='Назад',
-            callback_data=json.dumps({'back': True}),
-        ),
-    ]
-
-    for product_notes in cart_items.get('products'):
-        product_name = product_notes.get("name")
-        product_quantity = product_notes.get("quantity")
-        product_price = int(product_notes.get("price") / 100)
-        text += f'{product_name} {product_quantity}кг. - {product_price} ₽\n'
-
-        variants.append(
-            InlineKeyboardButton(
-                text=f'Удалить {product_notes.get("name")}',
-                callback_data=json.dumps({
-                    'id': product_notes.get('id'),
-                    'delete': True,
-                }),
-            )
-        )
-
-    if cart_price:
-        variants.append(
-            InlineKeyboardButton(
-                text=f'Оплатить {int(cart_items.get("cart_price") / 100)} ₽',
-                callback_data=json.dumps({'payment': True}),
-            ),
-        )
-
-    query.answer()
-    query.edit_message_media(
-        media=InputMediaPhoto(
-            media=open('cart.png', 'rb'),
-            caption=text,
-        ),
-        reply_markup=InlineKeyboardMarkup(build_menu(variants, n_cols=1)),
-    )
-
-    return Step.HANDLE_CART
-
-
-def handle_menu(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
-    query = update.callback_query
-
     db.set(query.message.chat.id, 'HANDLE_MENU')
+
+    if callback_query.get('cart'):
+        return handle_cart(update, context, db, elastic)
 
     query.answer()
     query.edit_message_media(
@@ -254,7 +287,7 @@ def handle_menu(update: Update, context: CallbackContext, db: redis.StrictRedis,
             media=open('logo.png', 'rb'),
             caption=dedent(f'''\
                 {update.effective_user.full_name}, я продаю свежую красную рыбу 🐠
-                
+
                 Посмотри мой ассортимент 👇
             '''),
         ),
@@ -265,6 +298,44 @@ def handle_menu(update: Update, context: CallbackContext, db: redis.StrictRedis,
     context.user_data['chat_id'] = query.message.chat.id
 
     return Step.HANDLE_DESCRIPTION
+
+
+def handle_payment(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
+    query = update.callback_query
+    callback_query = json.loads(query.data)
+
+    db.set(query.message.chat.id, 'WAITING_EMAIL')
+
+    if callback_query.get('menu'):
+        return handle_menu(update, context, db, elastic)
+    elif callback_query.get('cart'):
+        return handle_cart(update, context, db, elastic)
+
+    variants = [
+        InlineKeyboardButton(
+            text='В меню',
+            callback_data=json.dumps({'menu': True}),
+        ),
+        InlineKeyboardButton(
+            text='Посмотреть корзину',
+            callback_data=json.dumps({'cart': True}),
+        ),
+    ]
+
+    query.answer()
+    query.edit_message_media(
+        media=InputMediaPhoto(
+            media=open('logo.png', 'rb'),
+            caption=dedent(f'''\
+                Укажите свой email 📧
+                
+                Мы на него отправим счёта на оплату {callback_query.get("cart_amount")} ₽
+            '''),
+        ),
+        reply_markup=InlineKeyboardMarkup(build_keyboard_buttons(variants, n_cols=1)),
+    )
+
+    return Step.WAITING_EMAIL
 
 
 def handle_start(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
@@ -332,13 +403,13 @@ def main():
         decode_responses=True,
     )
 
-    handle_start_ = partial(handle_start, db=db, elastic=elastic)
-    handle_menu_ = partial(handle_menu, db=db, elastic=elastic)
-    handle_description_ = partial(handle_description, db=db, elastic=elastic)
     handle_add_to_cart_ = partial(handle_add_to_cart, db=db, elastic=elastic)
     handle_cart_ = partial(handle_cart, db=db, elastic=elastic)
-    handle_fallback_ = partial(handle_fallback, db=db, elastic=elastic)
+    handle_description_ = partial(handle_description, db=db, elastic=elastic)
     handle_error_ = partial(handle_error, db=db, elastic=elastic)
+    handle_fallback_ = partial(handle_fallback, db=db, elastic=elastic)
+    handle_menu_ = partial(handle_menu, db=db, elastic=elastic)
+    handle_start_ = partial(handle_start, db=db, elastic=elastic)
 
     logger.info('Start Telegram bot.')
 
