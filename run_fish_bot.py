@@ -142,8 +142,48 @@ def handle_description(update: Update, context: CallbackContext, db: redis.Stric
     return Step.HANDLE_ADD_TO_CART
 
 
-def handle_fallback(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text('Я тебя не понял...')
+def handle_error(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
+    logger.error(msg='Exception during message processing:', exc_info=context.error)
+
+    db.set(context.user_data['chat_id'], 'ERROR')
+
+    context.bot.edit_message_media(
+        chat_id=context.user_data['chat_id'],
+        message_id=context.user_data['bot_last_message_id'],
+        media=InputMediaPhoto(
+            media=open('logo.png', 'rb'),
+            caption=dedent(f'''\
+                    К сожалению произошла ошибка в момент обработки сообщения ☹️
+                    Мы уже работаем над этой проблемой 👨‍🔧
+
+                    {update.effective_user.full_name}, а пока посмотри мой ассортимент 👇,
+                '''),
+        ),
+        reply_markup=get_assortment_keyboard(elastic),
+    ),
+
+    return Step.HANDLE_MENU
+
+
+def handle_fallback(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
+    db.set(context.user_data['chat_id'], 'FALLBACK')
+
+    context.bot.edit_message_media(
+        chat_id=context.user_data['chat_id'],
+        message_id=context.user_data['bot_last_message_id'],
+        media=InputMediaPhoto(
+            media=open('logo.png', 'rb'),
+            caption=dedent(f'''\
+                {update.effective_user.full_name}, я не понял твоё прошлое сообщение ☹️\n
+                Мне понятны только нажатия на кнопки 🤷
+                
+                Посмотри мой ассортимент 👇,
+            '''),
+        ),
+        reply_markup=get_assortment_keyboard(elastic),
+    ),
+
+    return Step.HANDLE_MENU
 
 
 def handle_cart(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
@@ -212,13 +252,16 @@ def handle_menu(update: Update, context: CallbackContext, db: redis.StrictRedis,
         reply_markup=get_assortment_keyboard(elastic),
     ),
 
+    context.user_data['bot_last_message_id'] = query.message.message_id
+    context.user_data['chat_id'] = query.message.chat.id
+
     return Step.HANDLE_DESCRIPTION
 
 
 def handle_start(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
     db.set(update.message.chat.id, 'START')
 
-    context.bot.send_photo(
+    message = context.bot.send_photo(
         update.message.chat.id,
         photo=open('logo.png', 'rb'),
         caption=dedent(f'''\
@@ -230,15 +273,10 @@ def handle_start(update: Update, context: CallbackContext, db: redis.StrictRedis
         reply_markup=get_assortment_keyboard(elastic),
     )
 
+    context.user_data['bot_last_message_id'] = message.message_id
+    context.user_data['chat_id'] = update.message.chat.id
+
     return Step.HANDLE_DESCRIPTION
-
-def send_err(update: Update, context: CallbackContext) -> None:
-    logger.error(msg='Exception during message processing:', exc_info=context.error)
-
-    if update.effective_message:
-        text = 'К сожалению произошла ошибка в момент обработки сообщения. ' \
-               'Мы уже работаем над этой проблемой.'
-        update.effective_message.reply_text(text)
 
 
 def main():
@@ -290,14 +328,18 @@ def main():
     handle_description_ = partial(handle_description, db=db, elastic=elastic)
     handle_add_to_cart_ = partial(handle_add_to_cart, db=db, elastic=elastic)
     handle_cart_ = partial(handle_cart, db=db, elastic=elastic)
-    handle_fallback_ = partial(handle_fallback)
+    handle_fallback_ = partial(handle_fallback, db=db, elastic=elastic)
+    handle_error_ = partial(handle_error, db=db, elastic=elastic)
 
     logger.info('Start Telegram bot.')
 
     while True:
         try:
             conv_handler = ConversationHandler(
-                entry_points=[CommandHandler('start', handle_start_)],
+                entry_points=[
+                    CommandHandler('start', handle_start_),
+                    CallbackQueryHandler(handle_menu_),
+                ],
                 states={
                     Step.HANDLE_MENU: [
                         CallbackQueryHandler(handle_menu_),
@@ -321,7 +363,7 @@ def main():
 
             updater = Updater(tg_token)
             dispatcher = updater.dispatcher
-            dispatcher.add_error_handler(send_err)
+            dispatcher.add_error_handler(handle_error_)
             dispatcher.add_handler(conv_handler)
             updater.start_polling()
             updater.idle()
