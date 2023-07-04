@@ -81,6 +81,10 @@ class ElasticPath:
         )
         response.raise_for_status()
 
+    def clear_cart(self) -> None:
+        for product_notes in self.get_cart_items().get('products'):
+            self.delete_product_from_cart(product_notes.get('id'))
+
     def delete_product_from_cart(self, product_id) -> None:
         response = requests.delete(self.carts_url + f'{self.client_id}/items/' + product_id, headers=self.headers)
         response.raise_for_status()
