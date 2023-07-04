@@ -231,6 +231,8 @@ def handle_description(update: Update, context: CallbackContext, db: redis.Stric
 def handle_email(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
     db.set(update.message.chat.id, 'WAITING_EMAIL')
 
+    elastic.clear_cart()
+
     variants = [
         InlineKeyboardButton(
             text='В меню',
@@ -470,6 +472,7 @@ def main():
                     ],
                     Step.WAITING_EMAIL: [
                         MessageHandler(Filters.regex('@'), handle_email_),
+                        CallbackQueryHandler(handle_cart_),
                         CommandHandler('start', handle_start_),
                     ],
                 },
