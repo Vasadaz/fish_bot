@@ -182,13 +182,18 @@ def handle_description(update: Update, context: CallbackContext, db: redis.Stric
 
 def handle_email(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
     db.set(update.message.chat.id, 'WAITING_EMAIL')
-    elastic.clear_cart()
+
+    email = update.message.text
+    name = f'{update.message.from_user.full_name} ({update.message.from_user.id})'
+
+    elastic.create_customer_cart(email=email, name=name)
+    # elastic.clear_cart()
 
     keyboard_buttons = InlineKeyboardMarkup([[InlineKeyboardButton(text='В меню', callback_data='menu')]])
     image_path = 'cart.png'
     text = dedent(f'''\
     Мы получили ваш email 📧
-    В течении дня вам придёт счёт на почту {update.message.text}
+    В течении дня вам придёт счёт на почту {email}
 
     Ваша корзина пуста.
     ''')
