@@ -2,8 +2,6 @@ from pathlib import Path
 
 import requests
 
-from environs import Env
-
 
 class ElasticPath:
     def __init__(
@@ -11,12 +9,10 @@ class ElasticPath:
         base_url: str,
         client_id: str,
         client_secret: str,
-        store_id: str,
     ):
         self.base_url = base_url
         self.client_id = client_id
         self.client_secret = client_secret
-        self.store_id = store_id
 
         self.access_url = self.base_url + '/oauth/access_token/'
         self.products_url = self.base_url + '/catalog/products/'
@@ -26,6 +22,7 @@ class ElasticPath:
 
         self.access_token = self._get_access()
         self.headers = {'Authorization': self.access_token}
+        self.headers_json = {**self.headers, 'Content-Type': 'application/json'}
 
     def _get_access(self) -> str:
         data = {
@@ -36,9 +33,9 @@ class ElasticPath:
 
         response = requests.post(self.access_url, data=data)
         response.raise_for_status()
-        response = response.json()
+        response_notes = response.json()
 
-        return  f'{response["token_type"]} {response["access_token"]}'
+        return  f'{response_notes.get("token_type")} {response_notes.get("access_token")}'
 
     @staticmethod
     def _serialize_product_notes(product_notes) -> dict[str:str|int]:
@@ -54,12 +51,7 @@ class ElasticPath:
             'main_image_id': product_relationships.get('main_image').get('data').get('id'),
         }
 
-    def add_product_to_cart(self, product_id, quantity) -> None:
-        headers = {
-            **self.headers,
-            'Content-Type': 'application/json',
-        }
-
+    def add_product_to_cart(self, customer_id: str, product_id: str, quantity: str) -> None:
         product_notes = self.get_product_notes(product_id)
 
         product_data = {
@@ -76,23 +68,19 @@ class ElasticPath:
         }
 
         response = requests.post(
-            self.carts_url + f'{self.client_id}/items',
-            headers=headers,
+            self.carts_url + f'{customer_id}/items',
+            headers=self.headers_json,
             json=product_data,
         )
         response.raise_for_status()
 
-    def clear_cart(self) -> None:
-        for product_notes in self.get_cart_items().get('products'):
-            self.delete_product_from_cart(product_notes.get('id'))
+    def clear_cart(self, customer_id: str) -> None:
+        for product_notes in self.get_cart_items(customer_id).get('products'):
+            self.delete_product_from_cart(customer_id, product_notes.get('id'))
 
     def create_customer(self, email: str, name: str):
         email = email.strip()
         name = name.strip()
-        headers = {
-            **self.headers,
-            'Content-Type': 'application/json',
-        }
 
         customer_data = {
             'data': {
@@ -102,55 +90,80 @@ class ElasticPath:
             },
         }
 
-        customer_response = requests.get(
+        response = requests.post(
             self.customers_url,
-            headers=headers,
-            params={'filter': f'eq(email,{email})'}
+            headers=self.headers_json,
+            json=customer_data
         )
+        response.raise_for_status()
 
-        customer_response = requests.post(self.customers_url, headers=headers,  json=customer_data)
-        customer_response.raise_for_status()
+        return response.json().get('data').get('id')
 
-        customer_id = customer_response.json().get('data').get('id')
-
-        return customer_id
-
-    def create_customer_cart(self, email: str, name: str):
-        email = email.strip()
-        name = name.strip()
-        headers = {
-            **self.headers,
-            'Content-Type': 'application/json',
-        }
+    def create_customer_cart(self, customer_id: str):
         cart_association_notes = {
-            'data':[{
+            'data': [{
                 'type': 'customer',
-                'id': self.get_customer_id(email, name),
+                'id': customer_id,
             }],
         }
 
         response = requests.post(
-            self.carts_url + f'{self.get_cart_id()}/relationships/customers/',
-            headers=headers,
+            self.carts_url + f'{self.get_cart_id(customer_id)}/relationships/customers/',
+            headers=self.headers_json,
             json=cart_association_notes,
         )
         response.raise_for_status()
 
         return
 
-    def delete_product_from_cart(self, product_id) -> None:
-        response = requests.delete(self.carts_url + f'{self.client_id}/items/' + product_id, headers=self.headers)
+    def create_order(self, customer_id: str):
+        address_notes = {
+            'first_name': self.get_customer_name(customer_id),
+            'last_name': '',  # Обязательное поле: Фамилия получателя счета.
+            'line_1': '',  # Обязательное поле: Первая строка платежного адреса.
+            'region': '',  # Обязательное поле: Указывает регион адреса выставления счетов.
+            'postcode': '',  # Обязательное поле: Почтовый индекс платежного адреса.
+            'country': '',  # Обязательное поле: Указывает страну адреса выставления счетов.
+        }
+        order_notes = {
+            'data': {
+                'customer': {'id': customer_id},
+                'billing_address': address_notes,
+                'shipping_address': address_notes,
+            }
+        }
+
+        response = requests.post(
+            self.carts_url + f'{self.get_cart_id(customer_id)}/checkout/',
+            headers=self.headers_json,
+            json=order_notes,
+        )
         response.raise_for_status()
 
-    def get_cart_id(self) -> str:
-        response = requests.get(self.carts_url + self.client_id, headers=self.headers)
+        return
+
+    def delete_product_from_cart(self, customer_id: str, product_id: str) -> None:
+        response = requests.delete(
+            self.carts_url + f'{customer_id}/items/' + product_id,
+            headers=self.headers
+        )
+        response.raise_for_status()
+
+    def get_cart_id(self, customer_id: str) -> str:
+        response = requests.get(
+            self.carts_url + customer_id,
+            headers=self.headers,
+        )
         response.raise_for_status()
 
 
         return response.json().get('data').get('id')
 
-    def get_cart_items(self) -> dict[str:str]:
-        response = requests.get(self.carts_url + f'{self.client_id}/items', headers=self.headers)
+    def get_cart_items(self, customer_id: str) -> dict[str:str]:
+        response = requests.get(
+            self.carts_url + f'{customer_id}/items',
+            headers=self.headers
+        )
         response.raise_for_status()
         cart_items = response.json()
 
@@ -158,9 +171,6 @@ class ElasticPath:
             'cart_amount': cart_items.get('meta').get('display_price').get('with_tax').get('amount'),
             'products': [],
         }
-
-        response = requests.get(self.carts_url + self.client_id, headers=self.headers)
-        response.raise_for_status()
 
         for item_notes in cart_items.get('data'):
             cart_notes['products'].append({
@@ -172,20 +182,24 @@ class ElasticPath:
 
         return cart_notes
 
-    def get_customer_id(self, email: str, name: str) -> str:
-        email = email.strip()
-        name = name.strip()
-
-        payload = {'filter': f'eq(email,{email})'}
-
-        response = requests.get(self.customers_url, headers=self.headers, params=payload)
+    def get_customer_email(self, customer_id: str) -> str:
+        response = requests.get(
+            self.customers_url + customer_id,
+            headers=self.headers,
+        )
         response.raise_for_status()
 
-        for customer_notes in response.json().get('data'):
-            if customer_notes['email'] == email:
-                return customer_notes['id']
+        return response.json().get('data').get('email')
 
-        return self.create_customer(email, name)
+
+    def get_customer_name(self, customer_id: str) -> str:
+        response = requests.get(
+            self.customers_url + customer_id,
+            headers=self.headers,
+        )
+        response.raise_for_status()
+
+        return response.json().get('data').get('name')
 
     def get_image_path(self, image_id) -> str:
         dir_path = Path('images')
@@ -195,7 +209,10 @@ class ElasticPath:
             if image_id == file_path.stem:
                 return file_path.as_posix()
 
-        response = requests.get(self.files_url + image_id, headers=self.headers)
+        response = requests.get(
+            self.files_url + image_id,
+            headers=self.headers,
+        )
         response.raise_for_status()
         download_url = response.json().get('data').get('link').get('href')
         save_path = Path(dir_path) / Path(download_url).name
@@ -209,13 +226,19 @@ class ElasticPath:
         return save_path.as_posix()
 
     def get_product_notes(self, product_id) -> dict[str:str]:
-        response = requests.get(self.products_url + product_id, headers=self.headers)
+        response = requests.get(
+            self.products_url + product_id,
+            headers=self.headers,
+        )
         response.raise_for_status()
 
         return self._serialize_product_notes(response.json().get('data'))
 
     def get_products(self) -> list[dict[str:str|int]]:
-        response = requests.get(self.products_url, headers=self.headers)
+        response = requests.get(
+            self.products_url,
+            headers=self.headers,
+        )
         response.raise_for_status()
 
         products = []
@@ -224,3 +247,19 @@ class ElasticPath:
 
         return products
 
+    def update_customer_email(self, customer_id: str, email: str) -> None:
+        email = email.strip()
+
+        customer_notes = {
+            'data': {
+                'type': 'customer',
+                'email': email,
+            }
+        }
+
+        response = requests.put(
+            self.customers_url + customer_id,
+            headers=self.headers_json,
+            json=customer_notes,
+        )
+        response.raise_for_status()

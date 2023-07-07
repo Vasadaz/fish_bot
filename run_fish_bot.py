@@ -73,10 +73,18 @@ def handle_add_to_cart(update: Update, context: CallbackContext, db: redis.Stric
 
     db.set(query.message.chat.id, 'HANDLE_ADD_TO_CART')
 
+    customer_id = db.get(f'{query.message.chat.id}_customer_id')
+
+    if not customer_id:
+        email = f'{query.message.chat.id}@telegram.id'
+        name = f'{query.message.chat.full_name} ({query.message.chat.id})'
+        customer_id = elastic.create_customer(email, name)
+        db.set(f'{query.message.chat.id}_customer_id', customer_id)
+
     product_id = callback_query.get('id')
     quantity = callback_query.get('quantity')
 
-    elastic.add_product_to_cart(product_id, quantity)
+    elastic.add_product_to_cart(customer_id, product_id, quantity)
 
     query.answer()
     query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(get_standard_buttons()))
@@ -88,8 +96,9 @@ def handle_cart(update: Update, context: CallbackContext, db: redis.StrictRedis,
     query = update.callback_query
 
     db.set(query.message.chat.id, 'HANDLE_CART')
+    customer_id = db.get(f'{query.message.chat.id}_customer_id')
 
-    cart_items = elastic.get_cart_items()
+    cart_items = elastic.get_cart_items(customer_id)
     cart_amount = int(cart_items.get("cart_amount") / 100)
     text = 'Состав корзины:\n'
     keyboard_buttons = []
@@ -129,8 +138,9 @@ def handle_cart(update: Update, context: CallbackContext, db: redis.StrictRedis,
 def handle_delete(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
     query = update.callback_query
     callback_query = json.loads(query.data)
+    customer_id = db.get(f'{query.message.chat.id}_customer_id')
 
-    elastic.delete_product_from_cart(callback_query.get('id'))
+    elastic.delete_product_from_cart(customer_id, callback_query.get('id'))
 
     return handle_cart(update, context, db, elastic)
 
@@ -183,17 +193,17 @@ def handle_description(update: Update, context: CallbackContext, db: redis.Stric
 def handle_email(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
     db.set(update.message.chat.id, 'WAITING_EMAIL')
 
-    email = update.message.text
-    name = f'{update.message.from_user.full_name} ({update.message.from_user.id})'
+    customer_id = db.get(f'{update.message.chat.id}_customer_id')
 
-    elastic.create_customer_cart(email=email, name=name)
-    # elastic.clear_cart()
+    elastic.update_customer_email(customer_id, update.message.text)
+    elastic.create_order(customer_id)
+    elastic.clear_cart(customer_id)
 
     keyboard_buttons = InlineKeyboardMarkup([[InlineKeyboardButton(text='В меню', callback_data='menu')]])
     image_path = 'cart.png'
     text = dedent(f'''\
     Мы получили ваш email 📧
-    В течении дня вам придёт счёт на почту {email}
+    В течении дня вам придёт счёт на почту {elastic.get_customer_email(customer_id)}
 
     Ваша корзина пуста.
     ''')
@@ -275,6 +285,31 @@ def handle_menu(update: Update, context: CallbackContext, db: redis.StrictRedis,
 
     return Step.HANDLE_DESCRIPTION
 
+def handle_order(update: Update, context: CallbackContext,  db: redis.StrictRedis, elastic: ElasticPath) -> Step:
+    query = update.callback_query
+    db.set(query.message.chat.id, 'CREATE_ORDER')
+
+    customer_id = db.get(f'{query.message.chat.id}_customer_id')
+
+    elastic.create_order(customer_id)
+    elastic.clear_cart(customer_id)
+
+    keyboard_buttons = InlineKeyboardMarkup([[InlineKeyboardButton(text='В меню', callback_data='menu')]])
+    image_path = 'cart.png'
+    text = dedent(f'''\
+    В течении дня вам придёт счёт на почту {elastic.get_customer_email(customer_id)}
+
+    Ваша корзина пуста.
+    ''')
+    media = InputMediaPhoto(media=open(image_path, 'rb'), caption=text)
+
+    query.edit_message_media(
+        media=media,
+        reply_markup=keyboard_buttons,
+    )
+
+    return Step.HANDLE_CART
+
 
 def handle_payment(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
     query = update.callback_query
@@ -282,8 +317,14 @@ def handle_payment(update: Update, context: CallbackContext, db: redis.StrictRed
 
     db.set(query.message.chat.id, 'WAITING_EMAIL')
 
+    customer_id = db.get(f'{query.message.chat.id}_customer_id')
+
+    if not str(query.message.chat.id) in elastic.get_customer_email(customer_id):
+        return handle_order(update, context, db, elastic)
+
     image_path = 'cart.png'
     text = dedent(f'''\
+    У нас нет вашей почты 😔
     Укажите свой email 📧
     
     Мы на него отправим счёта на оплату {callback_query.get("cart_amount")} ₽
@@ -329,7 +370,6 @@ def main():
     elastic_base_url = env.str('ELASTIC_BASE_URL')
     elastic_client_id = env.str('ELASTIC_CLIENT_ID')
     elastic_client_secret = env.str('ELASTIC_CLIENT_SECRET')
-    elastic_store_id = env.str('ELASTIC_STORE_ID')
     tg_token = env.str('TELEGRAM_BOT_TOKEN')
     admin_tg_token = env.str('TELEGRAM_ADMIN_BOT_TOKEN', '')
     admin_tg_chat_id = env.str('TELEGRAM_ADMIN_CHAT_ID', '')
@@ -337,12 +377,7 @@ def main():
     db_port = env.int('REDIS_PORT')
     db_password = env.str('REDIS_PASSWORD')
 
-    elastic = ElasticPath(
-        base_url=env.str('ELASTIC_BASE_URL'),
-        client_id=env.str('ELASTIC_CLIENT_ID'),
-        client_secret=env.str('ELASTIC_CLIENT_SECRET'),
-        store_id=env.str('ELASTIC_STORE_ID'),
-    )
+
 
     bot = Bot(tg_token)
     tg_bot_name = f'@{bot.get_me().username}'
@@ -362,6 +397,12 @@ def main():
         password=db_password,
         charset='utf-8',
         decode_responses=True,
+    )
+
+    elastic = ElasticPath(
+        base_url=env.str('ELASTIC_BASE_URL'),
+        client_id=env.str('ELASTIC_CLIENT_ID'),
+        client_secret=env.str('ELASTIC_CLIENT_SECRET'),
     )
 
     handle_add_to_cart_ = partial(handle_add_to_cart, db=db, elastic=elastic)
