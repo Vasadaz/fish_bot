@@ -126,7 +126,7 @@ def handle_cart(update: Update, context: CallbackContext, db: redis.StrictRedis,
     else:
         text = 'Ваша корзина пуста.'
 
-    image_path = 'cart.png'
+    image_path = 'static/cart.png'
     keyboard_buttons = build_keyboard_buttons(keyboard_buttons, cols_count=1)
     media = InputMediaPhoto(media=open(image_path, 'rb'), caption=text)
 
@@ -200,7 +200,7 @@ def handle_email(update: Update, context: CallbackContext, db: redis.StrictRedis
     elastic.clear_cart(customer_id)
 
     keyboard_buttons = InlineKeyboardMarkup([[InlineKeyboardButton(text='В меню', callback_data='menu')]])
-    image_path = 'cart.png'
+    image_path = 'static/cart.png'
     text = dedent(f'''\
     Мы получили ваш email 📧
     В течении дня вам придёт счёт на почту {elastic.get_customer_email(customer_id)}
@@ -223,7 +223,7 @@ def handle_error(update: Update, context: CallbackContext, db: redis.StrictRedis
     logger.error(msg='Exception during message processing:', exc_info=context.error)
     db.set(context.user_data['chat_id'], 'ERROR')
 
-    image_path = 'logo.png'
+    image_path = 'static/logo.png'
     text = dedent(f'''\
     К сожалению произошла ошибка в момент обработки сообщения ☹️
     Мы уже работаем над этой проблемой 👨‍🔧
@@ -245,7 +245,7 @@ def handle_error(update: Update, context: CallbackContext, db: redis.StrictRedis
 def handle_fallback(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
     db.set(context.user_data['chat_id'], 'FALLBACK')
 
-    image_path = 'logo.png'
+    image_path = 'static/logo.png'
     text = dedent(f'''\
     {update.effective_user.full_name}, я не понял твоё прошлое сообщение ☹️
     Мне понятны только нажатия на кнопки 🤷
@@ -269,7 +269,7 @@ def handle_menu(update: Update, context: CallbackContext, db: redis.StrictRedis,
 
     db.set(query.message.chat.id, 'HANDLE_MENU')
 
-    image_path = 'logo.png'
+    image_path = 'static/logo.png'
     text = dedent(f'''\
     {update.effective_user.full_name}, я продаю свежую красную рыбу 🐠
 
@@ -295,7 +295,7 @@ def handle_order(update: Update, context: CallbackContext,  db: redis.StrictRedi
     elastic.clear_cart(customer_id)
 
     keyboard_buttons = InlineKeyboardMarkup([[InlineKeyboardButton(text='В меню', callback_data='menu')]])
-    image_path = 'cart.png'
+    image_path = 'static/cart.png'
     text = dedent(f'''\
     В течении дня вам придёт счёт на почту {elastic.get_customer_email(customer_id)}
 
@@ -322,7 +322,7 @@ def handle_payment(update: Update, context: CallbackContext, db: redis.StrictRed
     if not str(query.message.chat.id) in elastic.get_customer_email(customer_id):
         return handle_order(update, context, db, elastic)
 
-    image_path = 'cart.png'
+    image_path = 'static/cart.png'
     text = dedent(f'''\
     У нас нет вашей почты 😔
     Укажите свой email 📧
@@ -340,7 +340,7 @@ def handle_payment(update: Update, context: CallbackContext, db: redis.StrictRed
 def handle_start(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
     db.set(update.message.chat.id, 'START')
 
-    image_path = 'logo.png'
+    image_path = 'static/logo.png'
     text = dedent(f'''\
     {update.effective_user.full_name}, привет 👋
     Я продаю свежую красную рыбу 🐠
