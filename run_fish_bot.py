@@ -29,6 +29,7 @@ from telegram.ext import (
 from bot_logger import BotLogsHandler
 from elasticpath import ElasticPath
 
+
 logger = logging.getLogger(__file__)
 
 
@@ -48,6 +49,7 @@ def build_keyboard_buttons(buttons: list[InlineKeyboardButton], cols_count: int)
 
 def get_assortment_keyboard(elastic: ElasticPath) -> InlineKeyboardMarkup:
     products = []
+
     for product_notes in elastic.get_products():
         products.append(InlineKeyboardButton(
                 text=product_notes.get('name'),
@@ -134,6 +136,7 @@ def handle_cart(update: Update, context: CallbackContext, db: redis.StrictRedis,
     query.edit_message_media(media=media, reply_markup=InlineKeyboardMarkup(keyboard_buttons))
 
     return Step.HANDLE_CART
+
 
 def handle_delete(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
     query = update.callback_query
@@ -237,7 +240,7 @@ def handle_error(update: Update, context: CallbackContext, db: redis.StrictRedis
         message_id=context.user_data['bot_last_message_id'],
         media=media,
         reply_markup=get_assortment_keyboard(elastic),
-    ),
+    )
 
     return Step.HANDLE_MENU
 
@@ -285,6 +288,7 @@ def handle_menu(update: Update, context: CallbackContext, db: redis.StrictRedis,
 
     return Step.HANDLE_DESCRIPTION
 
+
 def handle_order(update: Update, context: CallbackContext,  db: redis.StrictRedis, elastic: ElasticPath) -> Step:
     query = update.callback_query
     db.set(query.message.chat.id, 'CREATE_ORDER')
@@ -319,7 +323,7 @@ def handle_payment(update: Update, context: CallbackContext, db: redis.StrictRed
 
     customer_id = db.get(f'{query.message.chat.id}_customer_id')
 
-    if not str(query.message.chat.id) in elastic.get_customer_email(customer_id):
+    if f'{query.message.chat.id}@telegram.id' != elastic.get_customer_email(customer_id):
         return handle_order(update, context, db, elastic)
 
     image_path = 'static/cart.png'
@@ -377,8 +381,6 @@ def main():
     db_port = env.int('REDIS_PORT')
     db_password = env.str('REDIS_PASSWORD')
 
-
-
     bot = Bot(tg_token)
     tg_bot_name = f'@{bot.get_me().username}'
 
@@ -415,7 +417,6 @@ def main():
     handle_menu_ = partial(handle_menu, db=db, elastic=elastic)
     handle_payment_ = partial(handle_payment, db=db, elastic=elastic)
     handle_start_ = partial(handle_start, db=db, elastic=elastic)
-
 
     logger.info('Start Telegram bot.')
 
