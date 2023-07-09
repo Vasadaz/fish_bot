@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 
 import requests
@@ -21,8 +22,7 @@ class ElasticPath:
         self.customers_url = self.base_url + '/v2/customers/'
 
         self.access_token = self._get_access()
-        self.headers = {'Authorization': self.access_token}
-        self.headers_json = {**self.headers, 'Content-Type': 'application/json'}
+
 
     def _get_access(self) -> str:
         data = {
@@ -35,8 +35,18 @@ class ElasticPath:
         response.raise_for_status()
         response_notes = response.json()
 
+        self.access_token_expires = response_notes.get('expires')
+
         return  f'{response_notes.get("token_type")} {response_notes.get("access_token")}'
 
+    def _get_headers(self) -> dict[str:str]:
+        if self.access_token_expires <= datetime.utcnow().timestamp():
+            self.access_token = self._get_access()
+        return {'Authorization': self.access_token}
+
+    def _get_json_headers(self) -> dict[str:str]:
+        return {**self._get_headers(), 'Content-Type': 'application/json'}
+        
     @staticmethod
     def _serialize_product_notes(product_notes) -> dict[str:str|int]:
         product_attributes = product_notes.pop('attributes')
@@ -69,7 +79,7 @@ class ElasticPath:
 
         response = requests.post(
             f'{self.carts_url}{customer_id}/items',
-            headers=self.headers_json,
+            headers=self._get_json_headers(),
             json=product_data,
         )
         response.raise_for_status()
@@ -92,7 +102,7 @@ class ElasticPath:
 
         response = requests.post(
             self.customers_url,
-            headers=self.headers_json,
+            headers=self._get_json_headers(),
             json=customer_data
         )
         response.raise_for_status()
@@ -109,7 +119,7 @@ class ElasticPath:
 
         response = requests.post(
             f'{self.carts_url}{self.get_cart_id(customer_id)}/relationships/customers/',
-            headers=self.headers_json,
+            headers=self._get_json_headers(),
             json=cart_association_notes,
         )
         response.raise_for_status()
@@ -133,7 +143,7 @@ class ElasticPath:
 
         response = requests.post(
             f'{self.carts_url}{self.get_cart_id(customer_id)}/checkout/',
-            headers=self.headers_json,
+            headers=self._get_json_headers(),
             json=order_notes,
         )
         response.raise_for_status()
@@ -141,14 +151,14 @@ class ElasticPath:
     def delete_product_from_cart(self, customer_id: str, product_id: str) -> None:
         response = requests.delete(
             f'{self.carts_url}{customer_id}/items/{product_id}',
-            headers=self.headers
+            headers=self._get_headers()
         )
         response.raise_for_status()
 
     def get_cart_id(self, customer_id: str) -> str:
         response = requests.get(
             f'{self.carts_url}{customer_id}',
-            headers=self.headers,
+            headers=self._get_headers(),
         )
         response.raise_for_status()
 
@@ -157,7 +167,7 @@ class ElasticPath:
     def get_cart_items(self, customer_id: str) -> dict[str:str]:
         response = requests.get(
             f'{self.carts_url}{customer_id}/items',
-            headers=self.headers
+            headers=self._get_headers()
         )
         response.raise_for_status()
         response_notes = response.json()
@@ -180,7 +190,7 @@ class ElasticPath:
     def get_customer_email(self, customer_id: str) -> str:
         response = requests.get(
             f'{self.customers_url}{customer_id}',
-            headers=self.headers,
+            headers=self._get_headers(),
         )
         response.raise_for_status()
 
@@ -190,7 +200,7 @@ class ElasticPath:
     def get_customer_name(self, customer_id: str) -> str:
         response = requests.get(
             f'{self.customers_url}{customer_id}',
-            headers=self.headers,
+            headers=self._get_headers(),
         )
         response.raise_for_status()
 
@@ -206,7 +216,7 @@ class ElasticPath:
 
         response = requests.get(
             f'{self.files_url}{image_id}',
-            headers=self.headers,
+            headers=self._get_headers(),
         )
         response.raise_for_status()
         download_url = response.json().get('data').get('link').get('href')
@@ -223,7 +233,7 @@ class ElasticPath:
     def get_product_notes(self, product_id) -> dict[str:str]:
         response = requests.get(
             f'{self.products_url}{product_id}',
-            headers=self.headers,
+            headers=self._get_headers(),
         )
         response.raise_for_status()
 
@@ -234,7 +244,7 @@ class ElasticPath:
 
         response = requests.get(
             self.products_url,
-            headers=self.headers,
+            headers=self._get_headers(),
         )
         response.raise_for_status()
 
@@ -255,7 +265,7 @@ class ElasticPath:
 
         response = requests.put(
             f'{self.customers_url}{customer_id}',
-            headers=self.headers_json,
+            headers=self._get_json_headers(),
             json=customer_notes,
         )
         response.raise_for_status()

@@ -72,9 +72,6 @@ def get_standard_buttons() -> list[list[InlineKeyboardButton]]:
 def handle_add_to_cart(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
     query = update.callback_query
     callback_query = json.loads(query.data)
-
-    db.set(query.message.chat.id, 'HANDLE_ADD_TO_CART')
-
     customer_id = db.get(f'{query.message.chat.id}_customer_id')
 
     if not customer_id:
@@ -96,8 +93,6 @@ def handle_add_to_cart(update: Update, context: CallbackContext, db: redis.Stric
 
 def handle_cart(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
     query = update.callback_query
-
-    db.set(query.message.chat.id, 'HANDLE_CART')
     customer_id = db.get(f'{query.message.chat.id}_customer_id')
 
     cart_items = elastic.get_cart_items(customer_id)
@@ -148,12 +143,9 @@ def handle_delete(update: Update, context: CallbackContext, db: redis.StrictRedi
     return handle_cart(update, context, db, elastic)
 
 
-def handle_description(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
+def handle_description(update: Update, context: CallbackContext, elastic: ElasticPath) -> Step:
     query = update.callback_query
     callback_query = json.loads(query.data)
-
-    db.set(query.message.chat.id, 'HANDLE_DESCRIPTION')
-
     product_id = callback_query.get('id')
     product_notes = elastic.get_product_notes(product_id)
 
@@ -194,8 +186,6 @@ def handle_description(update: Update, context: CallbackContext, db: redis.Stric
 
 
 def handle_email(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
-    db.set(update.message.chat.id, 'WAITING_EMAIL')
-
     customer_id = db.get(f'{update.message.chat.id}_customer_id')
 
     elastic.update_customer_email(customer_id, update.message.text)
@@ -222,9 +212,8 @@ def handle_email(update: Update, context: CallbackContext, db: redis.StrictRedis
     return Step.HANDLE_CART
 
 
-def handle_error(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
+def handle_error(update: Update, context: CallbackContext, elastic: ElasticPath) -> Step:
     logger.error(msg='Exception during message processing:', exc_info=context.error)
-    db.set(context.user_data['chat_id'], 'ERROR')
 
     image_path = 'static/logo.png'
     text = dedent(f'''\
@@ -245,9 +234,7 @@ def handle_error(update: Update, context: CallbackContext, db: redis.StrictRedis
     return Step.HANDLE_MENU
 
 
-def handle_fallback(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
-    db.set(context.user_data['chat_id'], 'FALLBACK')
-
+def handle_fallback(update: Update, context: CallbackContext, elastic: ElasticPath) -> Step:
     image_path = 'static/logo.png'
     text = dedent(f'''\
     {update.effective_user.full_name}, я не понял твоё прошлое сообщение ☹️
@@ -267,11 +254,8 @@ def handle_fallback(update: Update, context: CallbackContext, db: redis.StrictRe
     return Step.HANDLE_MENU
 
 
-def handle_menu(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
+def handle_menu(update: Update, context: CallbackContext, elastic: ElasticPath) -> Step:
     query = update.callback_query
-
-    db.set(query.message.chat.id, 'HANDLE_MENU')
-
     image_path = 'static/logo.png'
     text = dedent(f'''\
     {update.effective_user.full_name}, я продаю свежую красную рыбу 🐠
@@ -291,8 +275,6 @@ def handle_menu(update: Update, context: CallbackContext, db: redis.StrictRedis,
 
 def handle_order(update: Update, context: CallbackContext,  db: redis.StrictRedis, elastic: ElasticPath) -> Step:
     query = update.callback_query
-    db.set(query.message.chat.id, 'CREATE_ORDER')
-
     customer_id = db.get(f'{query.message.chat.id}_customer_id')
 
     elastic.create_order(customer_id)
@@ -318,9 +300,6 @@ def handle_order(update: Update, context: CallbackContext,  db: redis.StrictRedi
 def handle_payment(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
     query = update.callback_query
     callback_query = json.loads(query.data)
-
-    db.set(query.message.chat.id, 'WAITING_EMAIL')
-
     customer_id = db.get(f'{query.message.chat.id}_customer_id')
 
     if f'{query.message.chat.id}@telegram.id' != elastic.get_customer_email(customer_id):
@@ -341,9 +320,7 @@ def handle_payment(update: Update, context: CallbackContext, db: redis.StrictRed
     return Step.WAITING_EMAIL
 
 
-def handle_start(update: Update, context: CallbackContext, db: redis.StrictRedis, elastic: ElasticPath) -> Step:
-    db.set(update.message.chat.id, 'START')
-
+def handle_start(update: Update, context: CallbackContext, elastic: ElasticPath) -> Step:
     image_path = 'static/logo.png'
     text = dedent(f'''\
     {update.effective_user.full_name}, привет 👋
@@ -409,14 +386,14 @@ def main():
 
     handle_add_to_cart_ = partial(handle_add_to_cart, db=db, elastic=elastic)
     handle_cart_ = partial(handle_cart, db=db, elastic=elastic)
-    handle_description_ = partial(handle_description, db=db, elastic=elastic)
+    handle_description_ = partial(handle_description, elastic=elastic)
     handle_delete_ = partial(handle_delete, db=db, elastic=elastic)
     handle_email_ = partial(handle_email, db=db, elastic=elastic)
-    handle_error_ = partial(handle_error, db=db, elastic=elastic)
-    handle_fallback_ = partial(handle_fallback, db=db, elastic=elastic)
-    handle_menu_ = partial(handle_menu, db=db, elastic=elastic)
+    handle_error_ = partial(handle_error, elastic=elastic)
+    handle_fallback_ = partial(handle_fallback, elastic=elastic)
+    handle_menu_ = partial(handle_menu, elastic=elastic)
     handle_payment_ = partial(handle_payment, db=db, elastic=elastic)
-    handle_start_ = partial(handle_start, db=db, elastic=elastic)
+    handle_start_ = partial(handle_start, elastic=elastic)
 
     logger.info('Start Telegram bot.')
 
