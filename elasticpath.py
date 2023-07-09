@@ -14,7 +14,7 @@ class ElasticPath:
         self.client_id = client_id
         self.client_secret = client_secret
 
-        self.access_url = self.base_url + '/oauth/access_token/'
+        self.access_url = self.base_url + '/oauth/access_token/{path}'
         self.products_url = self.base_url + '/catalog/products/'
         self.carts_url = self.base_url + '/v2/carts/'
         self.files_url = self.base_url + '/v2/files/'
@@ -68,7 +68,7 @@ class ElasticPath:
         }
 
         response = requests.post(
-            self.carts_url + f'{customer_id}/items',
+            f'{self.carts_url}{customer_id}/items',
             headers=self.headers_json,
             json=product_data,
         )
@@ -108,7 +108,7 @@ class ElasticPath:
         }
 
         response = requests.post(
-            self.carts_url + f'{self.get_cart_id(customer_id)}/relationships/customers/',
+            f'{self.carts_url}{self.get_cart_id(customer_id)}/relationships/customers/',
             headers=self.headers_json,
             json=cart_association_notes,
         )
@@ -132,7 +132,7 @@ class ElasticPath:
         }
 
         response = requests.post(
-            self.carts_url + f'{self.get_cart_id(customer_id)}/checkout/',
+            f'{self.carts_url}{self.get_cart_id(customer_id)}/checkout/',
             headers=self.headers_json,
             json=order_notes,
         )
@@ -140,14 +140,14 @@ class ElasticPath:
 
     def delete_product_from_cart(self, customer_id: str, product_id: str) -> None:
         response = requests.delete(
-            self.carts_url + f'{customer_id}/items/' + product_id,
+            f'{self.carts_url}{customer_id}/items/{product_id}',
             headers=self.headers
         )
         response.raise_for_status()
 
     def get_cart_id(self, customer_id: str) -> str:
         response = requests.get(
-            self.carts_url + customer_id,
+            f'{self.carts_url}{customer_id}',
             headers=self.headers,
         )
         response.raise_for_status()
@@ -156,7 +156,7 @@ class ElasticPath:
 
     def get_cart_items(self, customer_id: str) -> dict[str:str]:
         response = requests.get(
-            self.carts_url + f'{customer_id}/items',
+            f'{self.carts_url}{customer_id}/items',
             headers=self.headers
         )
         response.raise_for_status()
@@ -179,7 +179,7 @@ class ElasticPath:
 
     def get_customer_email(self, customer_id: str) -> str:
         response = requests.get(
-            self.customers_url + customer_id,
+            f'{self.customers_url}{customer_id}',
             headers=self.headers,
         )
         response.raise_for_status()
@@ -189,7 +189,7 @@ class ElasticPath:
 
     def get_customer_name(self, customer_id: str) -> str:
         response = requests.get(
-            self.customers_url + customer_id,
+            f'{self.customers_url}{customer_id}',
             headers=self.headers,
         )
         response.raise_for_status()
@@ -205,7 +205,7 @@ class ElasticPath:
                 return file_path.as_posix()
 
         response = requests.get(
-            self.files_url + image_id,
+            f'{self.files_url}{image_id}',
             headers=self.headers,
         )
         response.raise_for_status()
@@ -222,7 +222,7 @@ class ElasticPath:
 
     def get_product_notes(self, product_id) -> dict[str:str]:
         response = requests.get(
-            self.products_url + product_id,
+            f'{self.products_url}{product_id}',
             headers=self.headers,
         )
         response.raise_for_status()
@@ -254,7 +254,7 @@ class ElasticPath:
         }
 
         response = requests.put(
-            self.customers_url + customer_id,
+            f'{self.customers_url}{customer_id}',
             headers=self.headers_json,
             json=customer_notes,
         )
